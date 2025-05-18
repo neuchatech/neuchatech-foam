@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 import { Foam } from '../../core/model/foam';
+import { URI } from '../../core/model/uri';
+import { Resource as NoteResource } from '../../core/model/note'; // Aliasing to avoid confusion if 'Note' is used elsewhere
 import { Logger } from '../../core/utils/log';
 import { fromVsCodeUri, toVsCodeUri } from '../../utils/vsc-utils';
 import { isSome } from '../../core/utils';
@@ -40,12 +42,17 @@ export default async function activate(
 
       vscode.window.onDidChangeActiveTextEditor(e => {
         if (e?.document?.uri?.scheme !== 'untitled') {
-          const note = foam.workspace.get(fromVsCodeUri(e.document.uri));
-          if (isSome(note)) {
-            panel.webview.postMessage({
-              type: 'didSelectNote',
-              payload: note.uri.path,
-            });
+          try { // Added try-catch here to prevent crash on opening non-note files
+            const note = foam.workspace.get(fromVsCodeUri(e.document.uri));
+            if (isSome(note)) {
+              panel.webview.postMessage({
+                type: 'didSelectNote',
+                payload: note.uri.path,
+              });
+            }
+          } catch (error) {
+             Logger.warn(`Could not get Foam note for active editor ${e.document.uri.path}: ${error.message}`);
+             // Do not post message to select node if note lookup fails
           }
         }
       });
@@ -61,14 +68,106 @@ function updateGraph(panel: vscode.WebviewPanel, foam: Foam) {
   });
 }
 
+// Helper function to get or create a node representation for a folder
+function getOrCreateFolderNode(
+  folderUri: URI,
+  foam: Foam,
+  graphNodeInfo: { [key: string]: any },
+  workspaceRootPath: string
+): string {
+  const folderPath = folderUri.path;
+  let nodeId: string;
+
+  // For the absolute root, handle specially if needed, otherwise it's like any other folder.
+  // The title might need adjustment for the root.
+  const isWorkspaceRoot = folderPath === workspaceRootPath;
+
+  const vsCodeFolderUri = toVsCodeUri(folderUri);
+  const readmeUri = vscode.Uri.joinPath(vsCodeFolderUri, 'README.md');
+  const indexUri = vscode.Uri.joinPath(vsCodeFolderUri, 'index.md');
+
+  let readmeNote: NoteResource | null = null;
+  try {
+    readmeNote = foam.workspace.get(fromVsCodeUri(readmeUri));
+  } catch (e) {
+    // Suppress error, means file likely doesn't exist
+  }
+
+  let indexNote: NoteResource | null = null;
+  try {
+    indexNote = foam.workspace.get(fromVsCodeUri(indexUri));
+  } catch (e) {
+    // Suppress error
+  }
+
+  if (isSome(readmeNote)) {
+    nodeId = readmeNote.uri.path;
+    if (!graphNodeInfo[nodeId]) {
+      graphNodeInfo[nodeId] = {
+        id: nodeId,
+        type: readmeNote.type === 'note' ? readmeNote.properties.type ?? 'note' : readmeNote.type,
+        uri: readmeNote.uri,
+        title: cutTitle(readmeNote.type === 'note' ? readmeNote.title : readmeNote.uri.getBasename()),
+        properties: readmeNote.properties,
+        tags: readmeNote.tags,
+      };
+    }
+  } else if (isSome(indexNote)) {
+    nodeId = indexNote.uri.path;
+    if (!graphNodeInfo[nodeId]) {
+      graphNodeInfo[nodeId] = {
+        id: nodeId,
+        type: indexNote.type === 'note' ? indexNote.properties.type ?? 'note' : indexNote.type,
+        uri: indexNote.uri,
+        title: cutTitle(indexNote.type === 'note' ? indexNote.title : indexNote.uri.getBasename()),
+        properties: indexNote.properties,
+        tags: indexNote.tags,
+      };
+    }
+  } else {
+    nodeId = `folder:${folderPath}`;
+    if (!graphNodeInfo[nodeId]) {
+      let title = folderUri.getBasename() || folderPath;
+      if (isWorkspaceRoot && !folderUri.getBasename()) { // Special title for workspace root synthetic node
+        const workspaceFolderName = vscode.workspace.workspaceFolders?.[0]?.name ?? 'Workspace';
+        title = workspaceFolderName;
+      }
+      graphNodeInfo[nodeId] = {
+        id: nodeId,
+        type: 'folder',
+        uri: folderUri,
+        title: cutTitle(title),
+        properties: {},
+        tags: [],
+      };
+    }
+  }
+  return nodeId;
+}
+
 function generateGraphData(foam: Foam) {
   const graph = {
     nodeInfo: {},
     edges: new Set(),
   };
 
+  // Get workspace root URI and path
+  const vsCodeWorkspaceRootUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+  if (!vsCodeWorkspaceRootUri) {
+    Logger.error('No workspace folder found. Cannot determine workspace root for graph.');
+    // Return an empty graph or handle this error appropriately
+    return { nodeInfo: {}, links: [] };
+  }
+  const workspaceRootUri = fromVsCodeUri(vsCodeWorkspaceRootUri);
+  const workspaceRootPath = workspaceRootUri.path;
+
+  // Collect all unique folder URIs, excluding dot-folders
+  const folderUrisToProcess = new Map<string, URI>();
+  folderUrisToProcess.set(workspaceRootPath, workspaceRootUri); // Always include the workspace root
+
   foam.workspace.list().forEach(n => {
     try {
+      // Add note node to graph.nodeInfo
       const type = n.type === 'note' ? n.properties.type ?? 'note' : n.type;
       const title = n.type === 'note' ? n.title : n.uri.getBasename();
       graph.nodeInfo[n.uri.path] = {
@@ -79,11 +178,22 @@ function generateGraphData(foam: Foam) {
         properties: n.properties,
         tags: n.tags,
       };
+
+      // Collect folder URI for this note, excluding dot-folders
+      const dirUri = n.uri.getDirectory();
+      if (dirUri && dirUri.path && !folderUrisToProcess.has(dirUri.path)) {
+        const folderBasename = dirUri.getBasename();
+        if (folderBasename === '' || !folderBasename.startsWith('.')) { // Include root ('') but exclude dot-folders
+           folderUrisToProcess.set(dirUri.path, dirUri);
+        }
+      }
     } catch (e) {
-      Logger.warn(`Skipping note due to error during property access: ${n.uri.path}. Error: ${e.message}`);
+      Logger.warn(`Skipping note due to error during property access or directory lookup: ${n.uri.path}. Error: ${e.message}`);
       // Continue to the next note
     }
   });
+
+  // Add reference links
   foam.graph.getAllConnections().forEach(c => {
     graph.edges.add({
       source: c.source.path,
@@ -97,102 +207,62 @@ function generateGraphData(foam: Foam) {
         uri: c.target,
         title: c.target.path,
         properties: {},
+        tags: [],
       };
     }
   });
 
   // Add structural links based on folder hierarchy
-  const foldersProcessed = new Set<string>();
-
-  foam.workspace.list().forEach(note => {
-    const folderUri = note.uri.getDirectory();
+  folderUrisToProcess.forEach(folderUri => {
+    // Skip if folderUri is null or undefined, which can happen for workspace root if not properly set
+    if (!folderUri || !folderUri.path) {
+        Logger.warn(`Skipping an invalid folder URI during structural link generation.`);
+        return;
+    }
+    const folderNodeId = getOrCreateFolderNode(folderUri, foam, graph.nodeInfo, workspaceRootPath);
     const folderPath = folderUri.path;
 
-    // Avoid processing the same folder multiple times
-    if (foldersProcessed.has(folderPath)) {
-      return;
-    }
-    foldersProcessed.add(folderPath);
-
-    // Determine the folder's root node
-    let folderNodeId: string;
-    // Convert Foam URI to VSCode Uri for joinPath
-    const vsCodeFolderUri = toVsCodeUri(folderUri);
-    const readmeUri = vscode.Uri.joinPath(vsCodeFolderUri, 'README.md');
-    const indexUri = vscode.Uri.joinPath(vsCodeFolderUri, 'index.md');
-
-    // Convert VSCode Uri back to Foam URI for foam.workspace.get
-    let readmeNote = null;
-    try {
-      readmeNote = foam.workspace.get(fromVsCodeUri(readmeUri));
-    } catch (e) {
-      Logger.warn(`Could not get README.md for folder ${folderPath}, it might not exist or there was an error: ${e.message}`);
-      // readmeNote remains null, isSome will handle it
-    }
-
-    let indexNote = null;
-    try {
-      indexNote = foam.workspace.get(fromVsCodeUri(indexUri));
-    } catch (e) {
-      Logger.warn(`Could not get index.md for folder ${folderPath}, it might not exist or there was an error: ${e.message}`);
-      // indexNote remains null, isSome will handle it
-    }
-
-    if (isSome(readmeNote)) {
-      folderNodeId = readmeNote.uri.path;
-      // Ensure the README note is added as a node if it wasn't already
-      if (!graph.nodeInfo[folderNodeId]) {
-         graph.nodeInfo[folderNodeId] = {
-           id: folderNodeId,
-           type: readmeNote.type === 'note' ? readmeNote.properties.type ?? 'note' : readmeNote.type,
-           uri: readmeNote.uri,
-           title: cutTitle(readmeNote.type === 'note' ? readmeNote.title : readmeNote.uri.getBasename()),
-           properties: readmeNote.properties,
-           tags: readmeNote.tags,
-         };
+    // Link child notes in this folder to the folderNodeId
+    // Filter notes again to ensure we only link notes whose directory is the current folder
+    foam.workspace.list().filter(n => {
+        try {
+            const noteDir = n.uri?.getDirectory();
+            return noteDir?.path === folderPath;
+        } catch (e) { return false; }
+    }).forEach(childNote => {
+      // Ensure childNote exists as a node and is not the folder's representative note itself
+      if (graph.nodeInfo[childNote.uri.path] && folderNodeId !== childNote.uri.path) {
+        graph.edges.add({
+          source: folderNodeId,
+          target: childNote.uri.path,
+          type: 'structural',
+        });
       }
-    } else if (isSome(indexNote)) {
-      folderNodeId = indexNote.uri.path;
-       // Ensure the index note is added as a node if it wasn't already
-      if (!graph.nodeInfo[folderNodeId]) {
-         graph.nodeInfo[folderNodeId] = {
-           id: folderNodeId,
-           type: indexNote.type === 'note' ? indexNote.properties.type ?? 'note' : indexNote.type,
-           uri: indexNote.uri,
-           title: cutTitle(indexNote.type === 'note' ? indexNote.title : indexNote.uri.getBasename()),
-           properties: indexNote.properties,
-           tags: indexNote.tags,
-         };
-      }
-    } else {
-      // Create a synthetic folder node
-      folderNodeId = `folder:${folderPath}`;
-      // Add the synthetic folder node
-      if (!graph.nodeInfo[folderNodeId]) {
-        graph.nodeInfo[folderNodeId] = {
-          id: folderNodeId,
-          type: 'folder',
-          uri: folderUri, // Use folder URI for synthetic node
-          title: folderUri.getBasename() || folderPath, // Use folder name or path
-          properties: {}, // Synthetic nodes have no properties
-          tags: [], // Synthetic nodes have no tags
-        };
-      }
-    }
-
-    // Now, find all notes within this folder and create structural links
-    foam.workspace.list().filter(n => n.uri.getDirectory().path === folderPath).forEach(childNote => {
-        // Avoid creating a structural link from a folder node to itself if the folder node is a note (README/index)
-        if (folderNodeId !== childNote.uri.path) {
-             graph.edges.add({
-               source: folderNodeId,
-               target: childNote.uri.path,
-               type: 'structural', // Add structural type
-             });
-        }
     });
-  });
 
+    // Link this folder to its parent folder node
+    if (folderPath !== workspaceRootPath) {
+      try {
+        const parentFolderUri = folderUri.getDirectory(); // This gets the parent directory URI
+        // Ensure we don't try to link the root to itself or go above the workspace root
+        if (parentFolderUri && parentFolderUri.path && parentFolderUri.path !== folderPath && parentFolderUri.path.startsWith(workspaceRootPath)) {
+          // Check if the parent folder is also included in our set of folders to process (i.e., not a dot-folder)
+          if (folderUrisToProcess.has(parentFolderUri.path)) {
+             const parentNodeId = getOrCreateFolderNode(parentFolderUri, foam, graph.nodeInfo, workspaceRootPath);
+             if (parentNodeId !== folderNodeId) { // Avoid self-loops if a folder somehow is its own parent
+                graph.edges.add({
+                 source: parentNodeId,
+                 target: folderNodeId,
+                 type: 'structural',
+               });
+             }
+          }
+        }
+      } catch (e) {
+        Logger.warn(`Error creating parent link for folder ${folderPath}: ${e.message}`);
+      }
+    }
+  });
 
   return {
     nodeInfo: graph.nodeInfo,
@@ -236,15 +306,30 @@ async function createGraphPanel(foam: Foam, context: vscode.ExtensionContext) {
           break;
         }
         case 'webviewDidSelectNode': {
-          const noteUri = vscode.Uri.parse(message.payload);
-          const selectedNote = foam.workspace.get(fromVsCodeUri(noteUri));
-
-          if (isSome(selectedNote)) {
-            vscode.commands.executeCommand(
-              'vscode.open',
-              noteUri,
-              vscode.ViewColumn.One
-            );
+          const nodeUri = vscode.Uri.parse(message.payload);
+          // Check if the node is a synthetic folder node before trying to open it as a file
+          if (nodeUri.scheme === 'folder') {
+             Logger.info(`Clicked on a synthetic folder node: ${nodeUri.path}. Not attempting to open as a file.`);
+             // Optionally, add logic here to reveal the folder in the file explorer
+             // vscode.commands.executeCommand('revealFileInOS', nodeUri); // This opens in OS file explorer
+             // vscode.commands.executeCommand('workbench.files.action.focusFilesExplorer'); // This focuses the explorer
+             // You might need to find a command to reveal a folder specifically
+          } else {
+            // For other node types (notes, placeholders), try to open the resource
+            try { // Added try-catch here to prevent crash on opening non-note resources
+              const selectedNote = foam.workspace.get(fromVsCodeUri(nodeUri));
+              if (isSome(selectedNote)) {
+                vscode.commands.executeCommand(
+                  'vscode.open',
+                  nodeUri,
+                  vscode.ViewColumn.One
+                );
+              } else {
+                 Logger.warn(`Could not get Foam note for selected node URI: ${nodeUri.path}. Not attempting to open.`);
+              }
+            } catch (error) {
+               Logger.error(`Error opening resource for selected node ${nodeUri.path}: ${error.message}`);
+            }
           }
           break;
         }
