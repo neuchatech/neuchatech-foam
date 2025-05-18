@@ -655,6 +655,26 @@
           "type": "object",
           "description": "Custom graph styling settings. An example is present in the documentation.",
           "default": {}
+        },
+        "showStructuralLinks": {
+          "type": "boolean",
+          "description": "Show structural links in the graph.",
+          "default": true
+        },
+        "showReferenceLinks": {
+          "type": "boolean",
+          "description": "Show reference links in the graph.",
+          "default": true
+        },
+        "structuralLineColor": {
+          "type": "string",
+          "description": "Color for structural links.",
+          "default": "#888"
+        },
+        "structuralForceStrength": {
+          "type": "number",
+          "description": "Spring force strength for structural links.",
+          "default": 1
         }
       }
     },
@@ -729,6 +749,7 @@
     "detect-newline": "^3.1.0",
     "github-slugger": "^1.4.0",
     "gray-matter": "^4.0.2",
+    "husky": "^9.1.7",
     "js-sha1": "^0.7.0",
     "lodash": "^4.17.21",
     "lru-cache": "^7.14.1",

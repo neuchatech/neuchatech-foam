@@ -279,5 +279,18 @@ async function getWebviewContent(
 }
 
 function getGraphStyle(): object {
-  return vscode.workspace.getConfiguration('foam.graph').get('style');
+  const config = vscode.workspace.getConfiguration('foam.graph');
+  const style = config.get('style') as object;
+  const showStructuralLinks = config.get('showStructuralLinks', true);
+  const showReferenceLinks = config.get('showReferenceLinks', true);
+  const structuralLineColor = config.get('structuralLineColor', '#888');
+  const structuralForceStrength = config.get('structuralForceStrength', 1);
+
+  return {
+    ...style,
+    showStructuralLinks,
+    showReferenceLinks,
+    structuralLineColor,
+    structuralForceStrength,
+  };
 }

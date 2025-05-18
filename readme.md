@@ -37,6 +37,65 @@ This document provides a high-level roadmap for the project.
   - Isolate our custom logic in a `neuchatech` namespace or a feature flag if needed
 
 ---
+## 🚀 Getting Started with Neuchatech Foam
+
+This section explains how to compile, install, and run this custom version of Foam.
+
+### Prerequisites
+
+*   [Node.js](https://nodejs.org/) (version specified in `engines.node` in [`package.json`](projets/neuchatech-foam/package.json:27), currently `>=18`)
+*   [Yarn](https://yarnpkg.com/)
+*   [Git](https://git-scm.com/)
+
+### Compilation
+
+1.  **Clone the repository:**
+    If you haven't already, clone the `neuchatech-foam` repository (or your fork of it):
+    ```bash
+    git clone https://github.com/neuchatech/foam.git # Or your fork's URL
+    cd neuchatech-foam
+    ```
+
+2.  **Install dependencies:**
+    From the root of the `neuchatech-foam` directory:
+    ```bash
+    yarn install
+    ```
+
+3.  **Build the extension:**
+    This command compiles all packages in the monorepo.
+    ```bash
+    yarn build
+    ```
+
+4.  **Package the VSCode extension:**
+    This creates a `.vsix` file for the `foam-vscode` package.
+    ```bash
+    yarn package-extension
+    ```
+    The packaged extension (e.g., `foam-vscode-0.26.11.vsix`) will be located in the `projets/neuchatech-foam/packages/foam-vscode/` directory. The version number in the filename (currently `0.26.11` as per [`packages/foam-vscode/package.json`](projets/neuchatech-foam/packages/foam-vscode/package.json:11)) might differ based on the current package version.
+
+### Installation in VSCode
+
+1.  **Uninstall or Disable Official Foam Extension:**
+    This fork currently uses the same extension ID (`foam.foam-vscode`) as the official Foam extension (defined in [`packages/foam-vscode/package.json`](projets/neuchatech-foam/packages/foam-vscode/package.json:2-13)). To avoid conflicts, you **must uninstall or disable the official Foam extension** from your VSCode instance before installing this fork.
+
+2.  **Install from VSIX:**
+    *   Open VSCode.
+    *   Go to the Extensions view (Ctrl+Shift+X or Cmd+Shift+X).
+    *   Click on the "..." (More Actions) menu in the top-right corner of the Extensions view.
+    *   Select "Install from VSIX..."
+    *   Navigate to and select the `.vsix` file you created in the compilation step (e.g., `projets/neuchatech-foam/packages/foam-vscode/foam-vscode-0.26.11.vsix`).
+    *   VSCode will install the extension. You may need to reload VSCode.
+
+### Usage
+
+Once installed, Neuchatech Foam will replace the standard Foam extension. You can use its features as you normally would with Foam, now including the enhanced graph visualization and other custom features detailed in this README.
+
+**Important Note on Extension ID:**
+As mentioned, this fork uses the ID `foam.foam-vscode`. If you plan to use this fork alongside the official Foam extension or distribute it more widely, it is highly recommended to change the `publisher` and/or `name` fields in the [`packages/foam-vscode/package.json`](projets/neuchatech-foam/packages/foam-vscode/package.json:2-13) file to create a unique extension ID (e.g., `neuchatech.foam-custom`). This would allow both extensions to be installed simultaneously, though you would still need to manage which one is active for your workspace to avoid potential feature overlap or conflicts.
+
+---
 
 ## 🧩 Components to Build
 

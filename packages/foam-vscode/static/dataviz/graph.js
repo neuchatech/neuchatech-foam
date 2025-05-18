@@ -181,6 +181,11 @@ const Actions = {
         ...defaultStyle.node,
         ...newStyle.node,
       },
+      // Add new structural link style properties
+      showStructuralLinks: newStyle.showStructuralLinks ?? defaultStyle.showStructuralLinks,
+      showReferenceLinks: newStyle.showReferenceLinks ?? defaultStyle.showReferenceLinks,
+      structuralLineColor: newStyle.structuralLineColor ?? defaultStyle.structuralLineColor,
+      structuralForceStrength: newStyle.structuralForceStrength ?? defaultStyle.structuralForceStrength,
     };
     graph.backgroundColor(model.style.background);
   },
@@ -194,6 +199,21 @@ const Actions = {
 function initDataviz(channel) {
   const elem = document.getElementById(CONTAINER_ID);
   const painter = new Painter();
+
+  // Create a tooltip element
+  const tooltip = document.createElement('div');
+  tooltip.id = 'graph-tooltip';
+  tooltip.style.position = 'absolute';
+  tooltip.style.background = 'rgba(0, 0, 0, 0.8)';
+  tooltip.style.color = 'white';
+  tooltip.style.padding = '5px';
+  tooltip.style.borderRadius = '3px';
+  tooltip.style.pointerEvents = 'none'; // Don't block mouse events
+  tooltip.style.display = 'none'; // Initially hidden
+  tooltip.style.zIndex = '1000'; // Ensure it's on top
+  document.body.appendChild(tooltip);
+
+
   graph(elem)
     .graphData(model.data)
     .backgroundColor(model.style.background)
@@ -230,15 +250,21 @@ function initDataviz(channel) {
       const label = info.title;
 
       painter
-        .circle(node.x, node.y, size, fill, border)
-        .text(
-          label,
-          node.x,
-          node.y + size + 1,
-          fontSize,
-          model.style.fontFamily,
-          textColor
-        );
+        .circle(node.x, node.y, size, fill, border);
+
+      // Implement adaptive node titles based on zoom level and node type
+      // Implement adaptive node titles based on zoom level and node type
+      // Show labels for folders and README/index files at all zoom levels, and other nodes above a certain zoom threshold (e.g., 0.5)
+      if (globalScale >= 0.5 || info.type === 'folder' || node.id.endsWith('/README.md') || node.id.endsWith('/index.md')) {
+         painter.text(
+           label,
+           node.x,
+           node.y + size + 1,
+           fontSize,
+           model.style.fontFamily,
+           textColor
+         );
+      }
     })
     .onRenderFramePost(ctx => {
       painter.paint(ctx);
@@ -246,6 +272,32 @@ function initDataviz(channel) {
     .linkColor(link => getLinkColor(link, model))
     .onNodeHover(node => {
       Actions.highlightNode(node?.id);
+
+      if (node) {
+        const info = model.graph.nodeInfo[node.id];
+        if (info) {
+          // Populate and show tooltip with more details
+          let tooltipContent = `<b>${info.title}</b><br>${info.uri.path}`;
+          if (info.properties && Object.keys(info.properties).length > 0) {
+            tooltipContent += '<br>---<br>Properties:';
+            for (const key in info.properties) {
+              if (Object.hasOwnProperty.call(info.properties, key)) {
+                tooltipContent += `<br><b>${key}:</b> ${info.properties[key]}`;
+              }
+            }
+          }
+          tooltip.innerHTML = tooltipContent;
+          tooltip.style.display = 'block';
+
+          // Position tooltip near the node (adjust offset as needed)
+          const nodeCoords = graph.graph2ScreenCoords(node.x, node.y);
+          tooltip.style.left = `${nodeCoords.x + 10}px`;
+          tooltip.style.top = `${nodeCoords.y + 10}px`;
+        }
+      } else {
+        // Hide tooltip
+        tooltip.style.display = 'none';
+      }
     })
     .onNodeClick((node, event) => {
       channel.postMessage({
@@ -333,6 +385,13 @@ function updateForceGraphDataFromModel(m) {
   // links can be swapped out without problem, we just need to filter them
   m.data.links = m.graph.links
     .filter(link => {
+      // Filter links based on configuration settings
+      if (link.type === 'structural' && !model.style.showStructuralLinks) {
+        return false;
+      }
+      if (link.type === 'reference' && !model.style.showReferenceLinks) {
+        return false;
+      }
       const isSource = Object.values(m.data.nodes).some(
         node => node.id === link.source
       );
@@ -351,6 +410,14 @@ function updateForceGraphDataFromModel(m) {
 
   // annoying we need to call this function, but I haven't found a good workaround
   graph.graphData(m.data);
+
+  // Adjust link force strength based on type and configuration
+  graph.d3Force('link').strength(link => {
+    if (link.type === 'structural' && model.style.showStructuralLinks) {
+      return model.style.structuralForceStrength;
+    }
+    return null; // Use default strength for other links or if structural links are hidden
+  });
 }
 
 const getNodeSize = d3
@@ -373,9 +440,14 @@ function getNodeTypeColor(type, model) {
 function getNodeColor(nodeId, model) {
   const info = model.graph.nodeInfo[nodeId];
   const style = model.style;
+
+  // Use 'folder' type color for README/index files to match synthetic folder nodes
+  const nodeType = (nodeId.endsWith('/README.md') || nodeId.endsWith('/index.md')) ? 'folder' : info.type;
+
   const typeFill = info.properties.color
     ? d3.rgb(info.properties.color)
-    : d3.rgb(getNodeTypeColor(info.type, model));
+    : d3.rgb(getNodeTypeColor(nodeType, model)); // Use determined nodeType for color
+
   switch (getNodeState(nodeId, model)) {
     case 'regular':
       return { fill: typeFill, border: typeFill };
@@ -394,12 +466,12 @@ function getNodeColor(nodeId, model) {
 
 function getLinkColor(link, model) {
   const style = model.style;
-  // Differentiate link color based on type
-  if (link.type === 'structural') {
-    // Use a specific color for structural links, or a default gray
-    return model.style.structuralLineColor || '#888';
-  } else if (link.type === 'reference') {
-    // Use default line color for reference links
+  // Differentiate link color based on type and configuration
+  if (link.type === 'structural' && model.style.showStructuralLinks) {
+    // Use configured structural line color
+    return style.structuralLineColor;
+  } else if (link.type === 'reference' && model.style.showReferenceLinks) {
+    // Use default line color for reference links based on state
     switch (getLinkState(link, model)) {
       case 'regular':
         if (
@@ -417,8 +489,8 @@ function getLinkColor(link, model) {
         throw new Error('Unknown state for reference link', link);
     }
   } else {
-     // Handle other potential link types or default
-     return style.lineColor;
+     // Handle other potential link types or if links are hidden
+     return 'rgba(0,0,0,0)'; // Make hidden links transparent
   }
 }
 
