@@ -68,16 +68,21 @@ function generateGraphData(foam: Foam) {
   };
 
   foam.workspace.list().forEach(n => {
-    const type = n.type === 'note' ? n.properties.type ?? 'note' : n.type;
-    const title = n.type === 'note' ? n.title : n.uri.getBasename();
-    graph.nodeInfo[n.uri.path] = {
-      id: n.uri.path,
-      type: type,
-      uri: n.uri,
-      title: cutTitle(title),
-      properties: n.properties,
-      tags: n.tags,
-    };
+    try {
+      const type = n.type === 'note' ? n.properties.type ?? 'note' : n.type;
+      const title = n.type === 'note' ? n.title : n.uri.getBasename();
+      graph.nodeInfo[n.uri.path] = {
+        id: n.uri.path,
+        type: type,
+        uri: n.uri,
+        title: cutTitle(title),
+        properties: n.properties,
+        tags: n.tags,
+      };
+    } catch (e) {
+      Logger.warn(`Skipping note due to error during property access: ${n.uri.path}. Error: ${e.message}`);
+      // Continue to the next note
+    }
   });
   foam.graph.getAllConnections().forEach(c => {
     graph.edges.add({
@@ -117,8 +122,21 @@ function generateGraphData(foam: Foam) {
     const indexUri = vscode.Uri.joinPath(vsCodeFolderUri, 'index.md');
 
     // Convert VSCode Uri back to Foam URI for foam.workspace.get
-    const readmeNote = foam.workspace.get(fromVsCodeUri(readmeUri));
-    const indexNote = foam.workspace.get(fromVsCodeUri(indexUri));
+    let readmeNote = null;
+    try {
+      readmeNote = foam.workspace.get(fromVsCodeUri(readmeUri));
+    } catch (e) {
+      Logger.warn(`Could not get README.md for folder ${folderPath}, it might not exist or there was an error: ${e.message}`);
+      // readmeNote remains null, isSome will handle it
+    }
+
+    let indexNote = null;
+    try {
+      indexNote = foam.workspace.get(fromVsCodeUri(indexUri));
+    } catch (e) {
+      Logger.warn(`Could not get index.md for folder ${folderPath}, it might not exist or there was an error: ${e.message}`);
+      // indexNote remains null, isSome will handle it
+    }
 
     if (isSome(readmeNote)) {
       folderNodeId = readmeNote.uri.path;
