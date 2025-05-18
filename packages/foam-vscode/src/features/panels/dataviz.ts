@@ -5,7 +5,7 @@ import { Resource as NoteResource, Tag } from '../../core/model/note'; // Aliasi
 import { Logger } from '../../core/utils/log';
 import { fromVsCodeUri, toVsCodeUri } from '../../utils/vsc-utils';
 import { isSome } from '../../core/utils';
-import { TextEncoder } from 'util'; // Node.js util, ensure it's available or use vscode.workspace.fs if in web worker
+import { TextEncoder } from 'util'; 
 
 export default async function activate(
   context: vscode.ExtensionContext,
@@ -32,7 +32,7 @@ export default async function activate(
       const foam = await foamPromise;
       panel = await createGraphPanel(foam, context);
       const onFoamChanged = _ => {
-        if (panel) { // Ensure panel still exists
+        if (panel) { 
           updateGraph(panel, foam);
         }
       };
@@ -44,7 +44,7 @@ export default async function activate(
       });
 
       vscode.window.onDidChangeActiveTextEditor(e => {
-        if (panel && e?.document?.uri?.scheme !== 'untitled') { // Ensure panel still exists
+        if (panel && e?.document?.uri?.scheme !== 'untitled') { 
           try {
             const note = foam.workspace.get(fromVsCodeUri(e.document.uri));
             if (isSome(note)) {
@@ -70,7 +70,6 @@ function updateGraph(panel: vscode.WebviewPanel, foam: Foam) {
   });
 }
 
-// Helper function to get or create a node representation for a folder
 function getOrCreateFolderNode(
   folderUri: URI,
   foam: Foam,
@@ -129,7 +128,7 @@ function getOrCreateFolderNode(
       }
       graphNodeInfo[nodeId] = {
         id: nodeId,
-        type: 'folder', // This type is used by the webview to identify synthetic folder nodes
+        type: 'folder', 
         uri: folderUri,
         title: cutTitle(title),
         properties: {},
@@ -140,7 +139,24 @@ function getOrCreateFolderNode(
   return nodeId;
 }
 
-// Helper to check if a URI path contains a segment starting with a dot
+function getOrCreateTagNode(
+    tagName: string,
+    graphNodeInfo: { [key: string]: any }
+): string {
+    const tagNodeId = `tag:${tagName}`;
+    if (!graphNodeInfo[tagNodeId]) {
+        graphNodeInfo[tagNodeId] = {
+            id: tagNodeId,
+            type: 'tag',
+            uri: URI.parse(tagNodeId), // Create a synthetic URI for the tag
+            title: `#${tagName}`,
+            properties: {},
+            tags: [], 
+        };
+    }
+    return tagNodeId;
+}
+
 function containsDotFolderSegment(uri: URI): boolean {
     const pathSegments = uri.path.split('/').filter(segment => segment !== '');
     for (let i = 0; i < pathSegments.length; i++) { 
@@ -154,7 +170,7 @@ function containsDotFolderSegment(uri: URI): boolean {
 function generateGraphData(foam: Foam) {
   const graph = {
     nodeInfo: {},
-    edges: new Set<any>(), // Added type for Set
+    edges: new Set<any>(), 
   };
 
   const vsCodeWorkspaceRootUri = vscode.workspace.workspaceFolders?.[0]?.uri;
@@ -170,8 +186,6 @@ function generateGraphData(foam: Foam) {
     folderUrisToProcess.set(workspaceRootPath, workspaceRootUri);
   }
 
-  const allTagsInWorkspace = new Map<string, URI>();
-
   foam.workspace.list().forEach(n => {
     try {
       if (containsDotFolderSegment(n.uri)) {
@@ -186,21 +200,15 @@ function generateGraphData(foam: Foam) {
         uri: n.uri,
         title: cutTitle(noteTitle),
         properties: n.properties,
-        tags: n.tags, // Keep original tags for potential filtering, but create separate tag nodes
+        tags: n.tags, 
       };
 
-      // Process tags for this note
       (n.tags as Tag[]).forEach(tag => {
         const tagName = tag.label;
-        const tagUriString = `tag:${tagName}`;
-        if (!allTagsInWorkspace.has(tagName)) {
-            // Create a synthetic URI for the tag
-            allTagsInWorkspace.set(tagName, URI.parse(tagUriString));
-        }
-        // Add edge from note to tag
+        const tagNodeId = getOrCreateTagNode(tagName, graph.nodeInfo); // Ensure tag node exists
         graph.edges.add({
             source: n.uri.path,
-            target: tagUriString, // Use the synthetic URI string as target ID
+            target: tagNodeId, 
             type: 'tag',
         });
       });
@@ -214,21 +222,6 @@ function generateGraphData(foam: Foam) {
       }
     } catch (e) {
       Logger.warn(`Skipping note due to error during property access or directory lookup: ${n.uri.path}. Error: ${e.message}`);
-    }
-  });
-
-  // Create nodes for all unique tags
-  allTagsInWorkspace.forEach((tagUri, tagName) => {
-    const tagNodeId = tagUri.path; // which will be `tag:${tagName}`
-    if (!graph.nodeInfo[tagNodeId]) {
-        graph.nodeInfo[tagNodeId] = {
-            id: tagNodeId,
-            type: 'tag',
-            uri: tagUri,
-            title: `#${tagName}`,
-            properties: {},
-            tags: [], // Tags don't have further tags
-        };
     }
   });
 
@@ -344,7 +337,7 @@ async function createGraphPanel(foam: Foam, context: vscode.ExtensionContext) {
           break;
         }
         case 'webviewDidSelectNode': {
-          const rawUriString = message.payload; // This is expected to be the node ID (which is a URI path or synthetic ID)
+          const rawUriString = message.payload; 
           let selectedFoamUri: URI;
           let isSyntheticFolder = false;
           let isTag = false;
@@ -355,19 +348,14 @@ async function createGraphPanel(foam: Foam, context: vscode.ExtensionContext) {
             selectedFoamUri = URI.file(folderPath); 
           } else if (rawUriString.startsWith('tag:')) {
             isTag = true;
-            // For tags, we don't have a file to open. We'll use the raw URI string for logging.
-            // selectedFoamUri = URI.parse(rawUriString); // This would be a URI with 'tag' scheme
             Logger.info(`Clicked on a tag node: ${rawUriString}. No action defined yet.`);
-            // Potentially, in the future, trigger a search or filter for this tag.
-            // For now, we do nothing to prevent errors.
-            return; // Exit early for tag clicks
+            return; 
           } else {
-            // Assume it's a file path that can be parsed into a vscode.Uri and then a Foam URI
              try {
                 selectedFoamUri = fromVsCodeUri(vscode.Uri.parse(rawUriString));
              } catch (parseError) {
                 Logger.error(`Error parsing URI from payload: ${rawUriString}. Error: ${parseError.message}`);
-                return; // Exit if URI parsing fails
+                return; 
              }
           }
           
@@ -399,7 +387,7 @@ async function createGraphPanel(foam: Foam, context: vscode.ExtensionContext) {
                     }
                 }
             }
-          } else if (!isTag) { // Ensure we don't try to open tags as files
+          } else if (!isTag) { 
             try {
               const selectedNote = foam.workspace.get(selectedFoamUri);
               if (isSome(selectedNote)) {

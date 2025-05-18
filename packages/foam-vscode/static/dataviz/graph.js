@@ -544,7 +544,7 @@ function getNodeState(nodeId, model) {
 function getLinkState(link, model) {
   try { 
     const isHighlighted = model.focusLinks.has(link);
-    const isVisible = model.data.links.some(l => l.source.id === getLinkNodeId(link.source) && l.target.id === getLinkNodeId(link.target)); 
+    const isVisible = model.data.links.some(l => l.source === getLinkNodeId(link.source) && l.target === getLinkNodeId(link.target));
 
      if (!isVisible) {
          return 'hidden'; 
