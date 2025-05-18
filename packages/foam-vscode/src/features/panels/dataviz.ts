@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { Foam } from '../../core/model/foam';
 import { Logger } from '../../core/utils/log';
-import { fromVsCodeUri } from '../../utils/vsc-utils';
+import { fromVsCodeUri, toVsCodeUri } from '../../utils/vsc-utils';
 import { isSome } from '../../core/utils';
 
 export default async function activate(
@@ -83,6 +83,7 @@ function generateGraphData(foam: Foam) {
     graph.edges.add({
       source: c.source.path,
       target: c.target.path,
+      type: 'reference', // Add edge type
     });
     if (c.target.isPlaceholder()) {
       graph.nodeInfo[c.target.path] = {
@@ -94,6 +95,86 @@ function generateGraphData(foam: Foam) {
       };
     }
   });
+
+  // Add structural links based on folder hierarchy
+  const foldersProcessed = new Set<string>();
+
+  foam.workspace.list().forEach(note => {
+    const folderUri = note.uri.getDirectory();
+    const folderPath = folderUri.path;
+
+    // Avoid processing the same folder multiple times
+    if (foldersProcessed.has(folderPath)) {
+      return;
+    }
+    foldersProcessed.add(folderPath);
+
+    // Determine the folder's root node
+    let folderNodeId: string;
+    // Convert Foam URI to VSCode Uri for joinPath
+    const vsCodeFolderUri = toVsCodeUri(folderUri);
+    const readmeUri = vscode.Uri.joinPath(vsCodeFolderUri, 'README.md');
+    const indexUri = vscode.Uri.joinPath(vsCodeFolderUri, 'index.md');
+
+    // Convert VSCode Uri back to Foam URI for foam.workspace.get
+    const readmeNote = foam.workspace.get(fromVsCodeUri(readmeUri));
+    const indexNote = foam.workspace.get(fromVsCodeUri(indexUri));
+
+    if (isSome(readmeNote)) {
+      folderNodeId = readmeNote.uri.path;
+      // Ensure the README note is added as a node if it wasn't already
+      if (!graph.nodeInfo[folderNodeId]) {
+         graph.nodeInfo[folderNodeId] = {
+           id: folderNodeId,
+           type: readmeNote.type === 'note' ? readmeNote.properties.type ?? 'note' : readmeNote.type,
+           uri: readmeNote.uri,
+           title: cutTitle(readmeNote.type === 'note' ? readmeNote.title : readmeNote.uri.getBasename()),
+           properties: readmeNote.properties,
+           tags: readmeNote.tags,
+         };
+      }
+    } else if (isSome(indexNote)) {
+      folderNodeId = indexNote.uri.path;
+       // Ensure the index note is added as a node if it wasn't already
+      if (!graph.nodeInfo[folderNodeId]) {
+         graph.nodeInfo[folderNodeId] = {
+           id: folderNodeId,
+           type: indexNote.type === 'note' ? indexNote.properties.type ?? 'note' : indexNote.type,
+           uri: indexNote.uri,
+           title: cutTitle(indexNote.type === 'note' ? indexNote.title : indexNote.uri.getBasename()),
+           properties: indexNote.properties,
+           tags: indexNote.tags,
+         };
+      }
+    } else {
+      // Create a synthetic folder node
+      folderNodeId = `folder:${folderPath}`;
+      // Add the synthetic folder node
+      if (!graph.nodeInfo[folderNodeId]) {
+        graph.nodeInfo[folderNodeId] = {
+          id: folderNodeId,
+          type: 'folder',
+          uri: folderUri, // Use folder URI for synthetic node
+          title: folderUri.getBasename() || folderPath, // Use folder name or path
+          properties: {}, // Synthetic nodes have no properties
+          tags: [], // Synthetic nodes have no tags
+        };
+      }
+    }
+
+    // Now, find all notes within this folder and create structural links
+    foam.workspace.list().filter(n => n.uri.getDirectory().path === folderPath).forEach(childNote => {
+        // Avoid creating a structural link from a folder node to itself if the folder node is a note (README/index)
+        if (folderNodeId !== childNote.uri.path) {
+             graph.edges.add({
+               source: folderNodeId,
+               target: childNote.uri.path,
+               type: 'structural', // Add structural type
+             });
+        }
+    });
+  });
+
 
   return {
     nodeInfo: graph.nodeInfo,

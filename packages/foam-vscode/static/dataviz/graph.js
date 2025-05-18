@@ -201,7 +201,8 @@ function initDataviz(channel) {
     .d3Force('x', d3.forceX())
     .d3Force('y', d3.forceY())
     .d3Force('collide', d3.forceCollide(graph.nodeRelSize()))
-    .linkWidth(() => model.style.lineWidth)
+    // Differentiate link width based on type
+    .linkWidth(link => link.type === 'structural' ? 2.5 : model.style.lineWidth) // Thicker for structural
     .linkDirectionalParticles(1)
     .linkDirectionalParticleWidth(link =>
       getLinkState(link, model) === 'highlighted'
@@ -393,21 +394,31 @@ function getNodeColor(nodeId, model) {
 
 function getLinkColor(link, model) {
   const style = model.style;
-  switch (getLinkState(link, model)) {
-    case 'regular':
-      if (
-        model.graph.nodeInfo[getLinkNodeId(link.source)].type === 'tag' &&
-        model.graph.nodeInfo[getLinkNodeId(link.target)].type === 'tag'
-      ) {
-        return getNodeTypeColor('tag', model);
-      }
-      return style.lineColor;
-    case 'highlighted':
-      return style.highlightedForeground;
-    case 'lessened':
-      return d3.hsl(style.lineColor).copy({ opacity: 0.5 });
-    default:
-      throw new Error('Unknown type for link', link);
+  // Differentiate link color based on type
+  if (link.type === 'structural') {
+    // Use a specific color for structural links, or a default gray
+    return model.style.structuralLineColor || '#888';
+  } else if (link.type === 'reference') {
+    // Use default line color for reference links
+    switch (getLinkState(link, model)) {
+      case 'regular':
+        if (
+          model.graph.nodeInfo[getLinkNodeId(link.source)].type === 'tag' &&
+          model.graph.nodeInfo[getLinkNodeId(link.target)].type === 'tag'
+        ) {
+          return getNodeTypeColor('tag', model);
+        }
+        return style.lineColor;
+      case 'highlighted':
+        return style.highlightedForeground;
+      case 'lessened':
+        return d3.hsl(style.lineColor).copy({ opacity: 0.5 });
+      default:
+        throw new Error('Unknown state for reference link', link);
+    }
+  } else {
+     // Handle other potential link types or default
+     return style.lineColor;
   }
 }
 
